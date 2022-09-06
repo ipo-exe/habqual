@@ -2,39 +2,47 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import ndimage
-import inp
+import inp, out
 import time
-
-
-# [0] define auxiliar window functions
-def lower_radius(n_position, n_radius_max=3):
-    """
-    :param n_position: int cell position
-    :param n_radius_max: int window radius
-    :return: lower radius
-    """
-    if n_position < n_radius_max:
-        return n_position
-    else:
-        return n_radius_max
-
-
-def upper_radius(n_position, n_max, n_radius_max=3):
-    """
-    :param n_position: int cell position
-    :param n_max: int cell upper bound
-    :param n_radius_max: int window radius
-    :return: lower radius
-    """
-    if n_position <= n_max - 1 - n_radius_max:
-        return n_radius_max
-    else:
-        return n_max - 1 - n_position
+from concurrent.futures import ThreadPoolExecutor
 
 
 # [1] define the main processing function
 def main(n_row_start, n_row_end, n_col_start, n_col_end):
-    global grd_deg, grd_lulc, grd_radius, n_window_radius
+    """
+    -- Degradation function using global variables
+    :param n_row_start: int row slice start
+    :param n_row_end: int row slice end
+    :param n_col_start: int column slice start
+    :param n_col_end: int column slice end
+    :return: none
+    """
+
+    # [0] define auxiliar window functions
+    def lower_radius(n_position, n_radius_max=3):
+        """
+        :param n_position: int cell position
+        :param n_radius_max: int window radius
+        :return: lower radius
+        """
+        if n_position < n_radius_max:
+            return n_position
+        else:
+            return n_radius_max
+
+    def upper_radius(n_position, n_max, n_radius_max=3):
+        """
+        :param n_position: int cell position
+        :param n_max: int cell upper bound
+        :param n_radius_max: int window radius
+        :return: lower radius
+        """
+        if n_position <= n_max - 1 - n_radius_max:
+            return n_radius_max
+        else:
+            return n_max - 1 - n_position
+
+    global grd_deg, grd_lulc, grd_radius, n_window_radius, dct_grd_impact
     # [6] -- varrer a matriz
     for i in range(n_row_start, n_row_end):
         # get general row bounds
@@ -85,40 +93,31 @@ def main(n_row_start, n_row_end, n_col_start, n_col_end):
                 grd_deg[i][j] = grd_deg[i][j] + (n_lulc_sensi * n_threat_sum)  # todo include Beta
 
 
-
-
 # import lulc map
-s = 'C:/bin/teia/itabuna/lulc_2021.asc'
+s = 'C:/bin/teia/ilheus/lulc_2021.asc'
 meta, grd_lulc = inp.asc_raster(s, dtype='byte')
 n_rows = len(grd_lulc)
 n_cols = len(grd_lulc[0])
-print(n_rows)
-print(n_cols)
 
-'''plt.imshow(grd_lulc)
-plt.show()
-'''
 # import lulc sensitivity table
-s = 'C:/bin/teia/itabuna/lulc.csv'
+s = 'C:/bin/teia/lulc.csv'
 df_lulc = pd.read_csv(s, sep=',')
-print(df_lulc.to_string())
 
 # import lulc threat table
-s = 'C:/bin/teia/itabuna/threats_alt.csv'
+s = 'C:/bin/teia/ilheus/threats_alt.csv'
 df_threats = pd.read_csv(s, sep=',')
 # compute effective weight
 df_threats['W'] = df_threats['WEIGHT'].values / df_threats['WEIGHT'].sum()
-print(df_threats.to_string())
-
+# get max distance
 n_max_dist_max = df_threats['MAX_DIST'].max()
-print(n_max_dist_max)
+
 # define fixed parameters
 n_pixel_res = 30 # m
 n_resolution = n_pixel_res / 1000 # km
-print(n_resolution)
+
+# expansion factor
 n_exp_factor = 2.3
 n_window_radius = int( n_exp_factor * (int(n_max_dist_max / n_resolution) + 1))
-print(n_window_radius)
 
 # get grid for window radius
 n_window_size = (n_window_radius * 2) + 1
@@ -133,23 +132,34 @@ for i in range(len(df_threats)):
     s_name = df_threats['THREAT'].values[i]
     n_dmax = df_threats['MAX_DIST'].values[i] / n_resolution
     s_type = df_threats['DECAY'].values[i]
+    # impact function
     grd_impact = np.exp(-2.99 * grd_distance / n_dmax)
-    '''plt.imshow(grd_impact)
-    plt.title(s_name)
-    plt.show()'''
+    # store in dict
     dct_grd_impact[s_name] = grd_impact
 
 # deploy degradation grid
 grd_deg = np.zeros(shape=np.shape(grd_lulc), dtype='float32')
+n_slices = n_rows
 time_start = time.perf_counter()
-main(
-    n_row_start=0,
-    n_row_end=n_rows,
-    n_col_start=0,
-    n_col_end=n_cols
-)
+with ThreadPoolExecutor() as executor:
+    for s in range(n_rows):
+        executor.submit(
+            main, s, s + 1, 0,n_cols
+        )
 time_end = time.perf_counter()
 print('Finished in {:.4f} seconds'.format(time_end - time_start))
+
+b_out = False
+if b_out:
+    out.asc_raster(
+        array=grd_deg,
+        meta=meta,
+        folder='C:/bin/teia/ilheus/alt_2022-09-06_05km_exp',
+        filename='degradation_alt'
+    )
+
 plt.imshow(grd_deg)
 plt.show()
+
+
 

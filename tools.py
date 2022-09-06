@@ -77,3 +77,4 @@ get_invest_tables(
     b_fut=False
 )
 '''
+
